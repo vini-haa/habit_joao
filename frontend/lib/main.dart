@@ -1,19 +1,24 @@
-// lib/main.dart
+// frontend/lib/main.dart
 import 'package:flutter/material.dart';
-// As importações de http, dart:convert e flutter_heatmap_calendar
-// são usadas em OverallProgressScreen, que foi movida para cá.
-// Se OverallProgressScreen for separada novamente, essas importações
-// podem ser movidas para o arquivo dela.
-import 'package:http/http.dart'
-    as http;
+
+// IMPORTS ESSENCIAIS - VERIFIQUE ESTES CAMINHOS E NOMES DE ARQUIVO CUIDADOSAMENTE:
+import 'package:frontend/screens/habit_list_screen.dart';
+import 'package:frontend/screens/habit_progress_list_screen.dart';
+// --- FIM DOS IMPORTS CRÍTICOS ---
+
+import 'package:frontend/services/notification_service.dart';
+import 'package:frontend/screens/habit_form_screen.dart';
+
+// SE OverallProgressScreen AINDA USA ESTES, MANTENHA-OS:
+import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_heatmap_calendar/flutter_heatmap_calendar.dart';
 
-import 'package:frontend/screens/habit_list_screen.dart';
-import 'package:frontend/screens/habit_progress_list_screen.dart';
-import 'package:frontend/screens/habit_form_screen.dart';
-
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Presumindo que NotificationService agora é encontrado e funciona:
+  await NotificationService().init();
+  await NotificationService().requestIOSPermissions();
   runApp(const MyApp());
 }
 
@@ -30,27 +35,30 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
-        // AppBarTheme global removida daqui, pois cada SliverAppBar
-        // controlará sua própria aparência (especialmente a cor de fundo
-        // que se mistura com o scaffoldBackgroundColor quando scrollado).
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.teal,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      themeMode: ThemeMode.system,
       home: const MainScreen(),
     );
   }
 }
 
-// OverallProgressScreen (mantida aqui para simplicidade, mas poderia ser um arquivo separado)
-// Esta tela NÃO usará o SliverAppBar.large por enquanto, para manter o foco nas telas de lista.
+// OverallProgressScreen
 class OverallProgressScreen extends StatefulWidget {
   const OverallProgressScreen({super.key});
-
   @override
   State<OverallProgressScreen> createState() => _OverallProgressScreenState();
 }
 
 class _OverallProgressScreenState extends State<OverallProgressScreen> {
   final String _baseUrl =
-      'http://10.0.2.2:5000';
+      'http://10.0.2.2:5000'; // Ou seu IP se testando em dispositivo físico
   Map<DateTime, int> _overallDatasets = {};
   bool _isLoadingOverallProgress = true;
   String? _overallErrorMessage;
@@ -61,12 +69,16 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
     _fetchOverallProgressData();
   }
 
+  void fetchOverallProgressDataPublic() {
+    _fetchOverallProgressData();
+  }
+
   Future<void> _fetchOverallProgressData() async {
+    if (!mounted) return;
     setState(() {
       _isLoadingOverallProgress = true;
       _overallErrorMessage = null;
     });
-
     try {
       final DateTime today = DateTime.now();
       final DateTime oneYearAgo = DateTime(
@@ -74,18 +86,13 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
         today.month,
         today.day,
       );
-
       final String apiUrl =
-          '$_baseUrl/all_habit_records?' +
-          'start_date=${oneYearAgo.toIso8601String().split('T')[0]}&' +
-          'end_date=${today.toIso8601String().split('T')[0]}';
-
+          '$_baseUrl/all_habit_records?start_date=${oneYearAgo.toIso8601String().split('T')[0]}&end_date=${today.toIso8601String().split('T')[0]}';
       final response = await http.get(Uri.parse(apiUrl));
-
+      if (!mounted) return;
       if (response.statusCode == 200) {
         List<dynamic> jsonList = jsonDecode(response.body);
         Map<DateTime, int> aggregatedDatasets = {};
-
         for (var json in jsonList) {
           DateTime recordDate = DateTime.parse(json['record_date'] as String);
           DateTime normalizedDate = DateTime(
@@ -93,37 +100,28 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
             recordDate.month,
             recordDate.day,
           );
-          int quantity =
-              json['quantity_completed'] as int? ??
-              1;
-
+          int quantity = json['quantity_completed'] as int? ?? 1;
           aggregatedDatasets[normalizedDate] =
               (aggregatedDatasets[normalizedDate] ?? 0) + quantity;
         }
-
-        if (mounted) {
-          setState(() {
-            _overallDatasets = aggregatedDatasets;
-            _isLoadingOverallProgress = false;
-          });
-        }
+        setState(() {
+          _overallDatasets = aggregatedDatasets;
+          _isLoadingOverallProgress = false;
+        });
       } else {
-        if (mounted) {
-          setState(() {
-            _overallErrorMessage =
-                'Falha ao carregar progresso geral: ${response.statusCode} - ${response.body}';
-            _isLoadingOverallProgress = false;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
         setState(() {
           _overallErrorMessage =
-              'Erro de conexão ao carregar progresso geral: $e';
+              'Falha ao carregar progresso geral: ${response.statusCode} - ${response.body}';
           _isLoadingOverallProgress = false;
         });
       }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _overallErrorMessage =
+            'Erro de conexão ao carregar progresso geral: $e';
+        _isLoadingOverallProgress = false;
+      });
     }
   }
 
@@ -134,9 +132,7 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
     Color githubDarkGreen = Colors.green.shade800;
     Color githubVeryDarkGreen = Colors.green.shade900;
     Color defaultDayColor =
-        Colors
-            .grey
-            .shade300;
+        Theme.of(context).colorScheme.surfaceContainerHighest;
 
     final DateTime heatmapStartDate = DateTime(
       DateTime.now().year - 1,
@@ -146,22 +142,11 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
     final DateTime heatmapEndDate = DateTime.now();
 
     return Scaffold(
-      backgroundColor:
-          Theme.of(
-            context,
-          ).colorScheme.surface,
-      appBar: AppBar( // AppBar normal para esta tela
+      appBar: AppBar(
         title: const Text('Progresso Geral'),
-        backgroundColor: Theme.of(context).colorScheme.surfaceVariant, // Cor de fundo para AppBar normal
-        foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
-        elevation: 0,
-        centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(
-              Icons.refresh,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+            icon: const Icon(Icons.refresh),
             onPressed: _fetchOverallProgressData,
           ),
         ],
@@ -174,21 +159,15 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Visão Geral',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 16),
                 Container(
                   padding: const EdgeInsets.all(12.0),
                   decoration: BoxDecoration(
-                    color:
-                        Theme.of(context)
-                            .colorScheme
-                            .surfaceVariant,
+                    color: Theme.of(context).colorScheme.surfaceVariant,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -196,19 +175,14 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
                     children: [
                       Text(
                         'Total de Registros',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
                         _overallDatasets.values
                             .fold(0, (sum, element) => sum + element)
                             .toString(),
-                        style: TextStyle(
-                          fontSize: 20,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.bold,
-                          color: Theme.of(context).colorScheme.onSurface,
                         ),
                       ),
                     ],
@@ -219,14 +193,13 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
             child: Text(
               'Atividade Diária (Todos os Hábitos)',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+              style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
           Expanded(
@@ -261,21 +234,49 @@ class _OverallProgressScreenState extends State<OverallProgressScreen> {
                           6: githubVeryDarkGreen,
                         },
                         defaultColor: defaultDayColor,
-                        textColor:
-                            Colors
-                                .black87,
-                        size: 14,
-                        margin: const EdgeInsets.all(2),
-                        borderRadius: 2,
+                        textColor: Theme.of(context).colorScheme.onSurface,
+                        size: 16,
+                        margin: const EdgeInsets.all(2.5),
+                        borderRadius: 3,
                         scrollable: true,
                         showText: false,
                         showColorTip: true,
-                        colorTipHelper: const [
-                          Text('Nenhum', style: TextStyle(color: Colors.black87, fontSize: 10)),
-                          Text('Pouco', style: TextStyle(color: Colors.black87, fontSize: 10)),
-                          Text('Médio', style: TextStyle(color: Colors.black87, fontSize: 10)),
-                          Text('Muito', style: TextStyle(color: Colors.black87, fontSize: 10)),
-                          Text('Mais', style: TextStyle(color: Colors.black87, fontSize: 10)),
+                        colorTipHelper: [
+                          Text(
+                            ' Nenhum',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            ' Pouco',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            ' Médio',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            ' Muito',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            ' Mais',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
                         ],
                         onClick: (date) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -305,36 +306,44 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
 
-  // As telas agora são instanciadas diretamente aqui para simplificar,
-  // mas em um app maior, você poderia usar chaves globais para
-  // chamar métodos de refresh nelas, se necessário.
-  static final List<Widget> _widgetOptions = <Widget>[
-    const HabitListScreen(),
-    const HabitProgressListScreen(),
-    const OverallProgressScreen(), // Adicionando a terceira tela
-  ];
+  // Estas GlobalKeys precisam que _HabitListScreenState e _HabitProgressListScreenState
+  // sejam tipos conhecidos, o que requer os imports corretos no TOPO DESTE ARQUIVO.
+  final GlobalKey<_HabitListScreenState> _habitListKey =
+      GlobalKey<_HabitListScreenState>();
+  final GlobalKey<_HabitProgressListScreenState> _habitProgressListKey =
+      GlobalKey<_HabitProgressListScreenState>();
+  final GlobalKey<_OverallProgressScreenState> _overallProgressKey =
+      GlobalKey<_OverallProgressScreenState>();
 
-  // Títulos para as AppBars de cada tela
-  static const List<String> _appBarTitles = <String>[
-    'Meus Hábitos',
-    'Progresso dos Hábitos',
-    'Visão Geral', // Título para a nova aba
-  ];
+  late final List<Widget> _widgetOptions;
 
+  @override
+  void initState() {
+    super.initState();
+    _widgetOptions = <Widget>[
+      HabitListScreen(key: _habitListKey),
+      HabitProgressListScreen(key: _habitProgressListKey),
+      OverallProgressScreen(key: _overallProgressKey),
+    ];
+  }
 
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
     });
+    if (index == 0) {
+      _habitListKey.currentState?.refreshHabits();
+    } else if (index == 1) {
+      _habitProgressListKey.currentState?.refreshHabits();
+    } else if (index == 2) {
+      _overallProgressKey.currentState?.fetchOverallProgressDataPublic();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _widgetOptions,
-      ),
+      body: IndexedStack(index: _selectedIndex, children: _widgetOptions),
       bottomNavigationBar: BottomNavigationBar(
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(
@@ -354,52 +363,31 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ],
         currentIndex: _selectedIndex,
-        selectedItemColor: Theme.of(context).colorScheme.primary,
         onTap: _onItemTapped,
-        backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
-        unselectedItemColor:
-            Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.7),
+        selectedItemColor: Theme.of(context).colorScheme.primary,
+        unselectedItemColor: Theme.of(
+          context,
+        ).colorScheme.onSurfaceVariant.withOpacity(0.7),
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
         type: BottomNavigationBarType.fixed,
       ),
-      // Condiciona a exibição do FAB
-      floatingActionButton: _selectedIndex == 0 // Exibe o FAB apenas se o índice for 0 (tela "Hábitos")
-          ? FloatingActionButton.large(
-              onPressed: () async {
-                // A navegação para HabitFormScreen deve funcionar como antes
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const HabitFormScreen()),
-                );
-                // Para atualizar a HabitListScreen após adicionar um hábito:
-                // A HabitListScreen já tem um _loadAllHabitsAndSetupFilters no initState.
-                // Se a navegação de volta causar um rebuild ou se você tiver um
-                // mecanismo de callback/provider, ela pode se atualizar.
-                // Uma forma simples de tentar forçar um refresh na HabitListScreen
-                // se ela estiver visível (_selectedIndex == 0) é chamar setState aqui,
-                // o que reconstrói o MainScreen e, por consequência, o IndexedStack
-                // pode reconstruir seu filho atual.
-                // No entanto, a melhor prática seria a HabitListScreen escutar
-                // por mudanças ou ser explicitamente atualizada.
-                if (mounted && _selectedIndex == 0) {
-                    // Se HabitListScreen tiver uma GlobalKey e um método de refresh,
-                    // você poderia chamá-lo.
-                    // Ex: habitListScreenKey.currentState?.refreshHabits();
-                    // Por ora, um setState() no MainScreen pode ser suficiente
-                    // se a HabitListScreen se reconstituir adequadamente.
-                    // Como _widgetOptions contém const HabitListScreen(), ela será
-                    // reconstruída se MainScreen for reconstruída.
-                  setState(() {});
-                }
-              },
-              child: const Icon(Icons.add_rounded),
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              foregroundColor: Theme.of(context).colorScheme.onTertiaryContainer,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28.0),
-              ),
-              elevation: 4.0,
-            )
-          : null, // Não exibe FAB para os outros índices
+      floatingActionButton:
+          _selectedIndex == 0
+              ? FloatingActionButton.large(
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const HabitFormScreen(),
+                    ),
+                  );
+                  if (result == true && mounted && _selectedIndex == 0) {
+                    _habitListKey.currentState?.refreshHabits();
+                  }
+                },
+                child: const Icon(Icons.add_rounded),
+              )
+              : null,
     );
   }
 }

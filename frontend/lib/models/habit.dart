@@ -1,4 +1,5 @@
-import 'category_model.dart'; // Importe o novo modelo
+// frontend/lib/models/habit.dart
+import 'category_model.dart';
 
 class Habit {
   final int id;
@@ -14,7 +15,12 @@ class Habit {
   final int? currentPeriodQuantity;
   final int? currentPeriodDaysCompleted;
   final int currentStreak;
-  final List<CategoryModel> categories; // Alterado de String? category para List<CategoryModel>
+  final List<CategoryModel> categories;
+
+  // Campos de Lembrete
+  final String? reminderTime; // Formato HH:MM
+  final List<String>? reminderDays; // Ex: ["MON", "TUE"]
+  final bool reminderEnabled;
 
   Habit({
     required this.id,
@@ -30,15 +36,29 @@ class Habit {
     this.currentPeriodQuantity,
     this.currentPeriodDaysCompleted,
     required this.currentStreak,
-    this.categories = const [], // Default para lista vazia
+    this.categories = const [],
+    this.reminderTime,
+    this.reminderDays,
+    this.reminderEnabled = false,
   });
 
   factory Habit.fromJson(Map<String, dynamic> json) {
     List<CategoryModel> parsedCategories = [];
     if (json['categories'] != null && json['categories'] is List) {
-      parsedCategories = (json['categories'] as List)
-          .map((catJson) => CategoryModel.fromJson(catJson as Map<String, dynamic>))
-          .toList();
+      parsedCategories =
+          (json['categories'] as List)
+              .map(
+                (catJson) =>
+                    CategoryModel.fromJson(catJson as Map<String, dynamic>),
+              )
+              .toList();
+    }
+
+    List<String>? parsedReminderDays;
+    if (json['reminder_days'] != null && json['reminder_days'] is List) {
+      // Certifica-se de que cada elemento é uma string
+      parsedReminderDays =
+          (json['reminder_days'] as List).map((day) => day.toString()).toList();
     }
 
     return Habit(
@@ -48,14 +68,23 @@ class Habit {
       countMethod: json['count_method'] as String,
       completionMethod: json['completion_method'] as String,
       targetQuantity: int.tryParse(json['target_quantity']?.toString() ?? ''),
-      targetDaysPerWeek: int.tryParse(json['target_days_per_week']?.toString() ?? ''),
+      targetDaysPerWeek: int.tryParse(
+        json['target_days_per_week']?.toString() ?? '',
+      ),
       createdAt: json['created_at'] as String,
       isCompletedToday: json['is_completed_today'] as bool,
       lastCompletedDate: json['last_completed_date'] as String?,
-      currentPeriodQuantity: int.tryParse(json['current_period_quantity']?.toString() ?? ''),
-      currentPeriodDaysCompleted: int.tryParse(json['current_period_days_completed']?.toString() ?? ''),
+      currentPeriodQuantity: int.tryParse(
+        json['current_period_quantity']?.toString() ?? '',
+      ),
+      currentPeriodDaysCompleted: int.tryParse(
+        json['current_period_days_completed']?.toString() ?? '',
+      ),
       currentStreak: json['current_streak'] as int,
       categories: parsedCategories,
+      reminderTime: json['reminder_time'] as String?,
+      reminderDays: parsedReminderDays,
+      reminderEnabled: json['reminder_enabled'] as bool? ?? false,
     );
   }
 }

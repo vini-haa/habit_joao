@@ -1,4 +1,3 @@
-// frontend/lib/screens/habit_form_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
@@ -6,6 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:frontend/models/habit.dart';
 import 'package:frontend/models/category_model.dart';
 import 'package:frontend/screens/selection_screen.dart';
+import 'package:frontend/services/notification_service.dart'; // Verifique o caminho
+import 'package:intl/intl.dart';
 
 class HabitFormScreen extends StatefulWidget {
   final Habit? habit;
@@ -33,6 +34,37 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
   bool _formChanged = false;
   bool _isLoadingCategories = true;
 
+  // Campos de Lembrete
+  bool _reminderEnabled = false;
+  TimeOfDay? _selectedReminderTime;
+  final Map<String, bool> _selectedReminderDays = {
+    'MON': false,
+    'TUE': false,
+    'WED': false,
+    'THU': false,
+    'FRI': false,
+    'SAT': false,
+    'SUN': false,
+  };
+  final List<String> _dayKeys = [
+    'MON',
+    'TUE',
+    'WED',
+    'THU',
+    'FRI',
+    'SAT',
+    'SUN',
+  ];
+  final List<String> _dayDisplayNames = [
+    'Seg',
+    'Ter',
+    'Qua',
+    'Qui',
+    'Sex',
+    'Sáb',
+    'Dom',
+  ];
+
   final String _baseUrl = 'http://10.0.2.2:5000';
 
   final Map<String, String> _intervalDisplayNames = {
@@ -40,8 +72,8 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
     'weekly': 'Semanal',
     'monthly': 'Mensal',
   };
-
   final Map<String, String> _completionTypeDisplayNames = {
+    'boolean': 'Sim/Não',
     'quantity': 'Quantidade',
     'minutes': 'Minutos',
   };
@@ -60,10 +92,32 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
           (widget.habit!.targetQuantity ?? '').toString();
       _targetDaysPerWeekController.text =
           (widget.habit!.targetDaysPerWeek ?? '').toString();
+
+      // Inicializar campos de lembrete
+      _reminderEnabled = widget.habit!.reminderEnabled;
+      if (widget.habit!.reminderTime != null) {
+        try {
+          List<String> parts = widget.habit!.reminderTime!.split(':');
+          _selectedReminderTime = TimeOfDay(
+            hour: int.parse(parts[0]),
+            minute: int.parse(parts[1]),
+          );
+        } catch (e) {
+          _selectedReminderTime = null;
+        }
+      }
+      if (widget.habit!.reminderDays != null) {
+        for (String dayKey in _dayKeys) {
+          _selectedReminderDays[dayKey] = widget.habit!.reminderDays!.contains(
+            dayKey,
+          );
+        }
+      }
     }
   }
 
   Future<void> _fetchAvailableCategories() async {
+    // ... (código existente)
     setState(() => _isLoadingCategories = true);
     try {
       final response = await http.get(Uri.parse('$_baseUrl/categories'));
@@ -81,7 +135,9 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                       .map(
                         (habitCat) => _availableCategories.firstWhere(
                           (availCat) => availCat.id == habitCat.id,
-                          orElse: () => habitCat,
+                          orElse:
+                              () =>
+                                  habitCat, // Mantém o original se não encontrar (improvável)
                         ),
                       )
                       .toList();
@@ -118,6 +174,29 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
       return;
     }
 
+    if (_reminderEnabled && _selectedReminderTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Por favor, selecione um horário para o lembrete.'),
+        ),
+      );
+      if (!_formChanged) setState(() => _formChanged = true);
+      return;
+    }
+
+    if (_reminderEnabled &&
+        _selectedReminderDays.values.where((selected) => selected).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Por favor, selecione ao menos um dia para o lembrete.',
+          ),
+        ),
+      );
+      if (!_formChanged) setState(() => _formChanged = true);
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) {
       if (!_formChanged) setState(() => _formChanged = true);
       return;
@@ -136,6 +215,12 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
 
     List<int> selectedCategoryIds =
         _selectedCategories.map((cat) => cat.id).toList();
+    List<String> activeReminderDays = [];
+    if (_reminderEnabled) {
+      _selectedReminderDays.forEach((key, value) {
+        if (value) activeReminderDays.add(key);
+      });
+    }
 
     try {
       final Map<String, dynamic> bodyData = {
@@ -158,6 +243,15 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                 ? null
                 : int.parse(_targetDaysPerWeekController.text),
         'category_ids': selectedCategoryIds,
+        'reminder_enabled': _reminderEnabled,
+        'reminder_time':
+            _reminderEnabled && _selectedReminderTime != null
+                ? "${_selectedReminderTime!.hour.toString().padLeft(2, '0')}:${_selectedReminderTime!.minute.toString().padLeft(2, '0')}"
+                : null,
+        'reminder_days':
+            _reminderEnabled && activeReminderDays.isNotEmpty
+                ? activeReminderDays
+                : null,
       };
 
       final response =
@@ -182,7 +276,65 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text(successMessage)));
         _formChanged = false;
-        Navigator.pop(context, true);
+
+        int habitId =
+            isEditing ? widget.habit!.id : jsonDecode(response.body)['id'];
+        String habitName = _nameController.text;
+
+        // Cancelar notificações antigas (se estiver editando)
+        if (isEditing) {
+          await NotificationService().cancelNotification(
+            widget.habit!.id,
+          ); // Para lembretes diários antigos
+          await NotificationService().cancelWeeklyNotificationsForHabit(
+            widget.habit!.id,
+          ); // Para lembretes semanais antigos
+        }
+
+        if (_reminderEnabled &&
+            _selectedReminderTime != null &&
+            activeReminderDays.isNotEmpty) {
+          List<int> daysToSchedule = [];
+          for (String dayKey in activeReminderDays) {
+            daysToSchedule.add(
+              _dayKeys.indexOf(dayKey) + 1,
+            ); // Converte MON -> 1 (DateTime.monday), etc.
+          }
+
+          // Se for diário (todos os dias da semana selecionados) OU se count_method for 'daily'
+          // e apenas um dia qualquer estiver selecionado (mas o usuário quer diariamente)
+          // Por simplicidade, se 'daily' for o intervalo do hábito, o lembrete será diário
+          // ignorando os dias selecionados (ou melhor, assume-se que serão todos)
+          if (_selectedCountMethod == 'daily' ||
+              activeReminderDays.length == 7) {
+            await NotificationService().scheduleDailyNotification(
+              id: habitId,
+              title: 'Lembrete de Hábito',
+              body: 'Não se esqueça de completar: $habitName',
+              time: _selectedReminderTime!,
+            );
+          } else {
+            // Agendamento Semanal para dias específicos
+            await NotificationService().scheduleWeeklyNotification(
+              id: habitId,
+              title: 'Lembrete de Hábito',
+              body: 'Não se esqueça de completar: $habitName',
+              time: _selectedReminderTime!,
+              days: daysToSchedule,
+            );
+          }
+        } else {
+          // Se lembretes foram desabilitados ou incompletos
+          await NotificationService().cancelNotification(habitId);
+          await NotificationService().cancelWeeklyNotificationsForHabit(
+            habitId,
+          );
+        }
+
+        Navigator.pop(
+          context,
+          true,
+        ); // true indica que algo mudou e a lista deve ser atualizada
       } else {
         final errorData = jsonDecode(response.body);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -197,6 +349,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
   }
 
   void _showCategorySelectionDialog() {
+    // ... (código existente)
     if (_isLoadingCategories) {
       ScaffoldMessenger.of(
         context,
@@ -216,9 +369,10 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
 
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
+      isScrollControlled: true, // Permite que o BottomSheet seja maior
       builder: (BuildContext context) {
         return StatefulBuilder(
+          // Para atualizar o estado dentro do BottomSheet
           builder: (BuildContext context, StateSetter setModalState) {
             return Padding(
               padding: EdgeInsets.fromLTRB(
@@ -230,7 +384,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(context).size.height * 0.6,
-                ),
+                ), // Limita altura
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -244,6 +398,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                     ),
                     const SizedBox(height: 16),
                     Expanded(
+                      // Para permitir scroll se muitas categorias
                       child: SingleChildScrollView(
                         child: Wrap(
                           spacing: 8.0,
@@ -257,6 +412,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                                   selected: isSelected,
                                   onSelected: (bool? selected) {
                                     setModalState(() {
+                                      // Usa o setModalState do StatefulBuilder
                                       if (selected == true) {
                                         if (!isSelected)
                                           tempSelectedCategories.add(category);
@@ -285,6 +441,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                           child: const Text('OK'),
                           onPressed: () {
                             setState(() {
+                              // Usa o setState da tela principal
                               _selectedCategories = List.from(
                                 tempSelectedCategories,
                               );
@@ -303,6 +460,19 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
         );
       },
     );
+  }
+
+  Future<void> _selectReminderTime(BuildContext context) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedReminderTime ?? TimeOfDay.now(),
+    );
+    if (picked != null && picked != _selectedReminderTime) {
+      setState(() {
+        _selectedReminderTime = picked;
+        _formChanged = true;
+      });
+    }
   }
 
   @override
@@ -398,11 +568,11 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                     labelText: 'Nome do Hábito',
                     border: OutlineInputBorder(),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty)
-                      return 'Por favor, insira o nome do hábito';
-                    return null;
-                  },
+                  validator:
+                      (value) =>
+                          (value == null || value.isEmpty)
+                              ? 'Por favor, insira o nome do hábito'
+                              : null,
                 ),
                 const SizedBox(height: 16),
                 ListTile(
@@ -476,11 +646,11 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                       });
                     }
                   },
-                  validator: (value) {
-                    if (value == null || value.isEmpty)
-                      return 'Por favor, selecione o intervalo.';
-                    return null;
-                  },
+                  validator:
+                      (value) =>
+                          (value == null || value.isEmpty)
+                              ? 'Por favor, selecione o intervalo.'
+                              : null,
                 ),
                 const SizedBox(height: 16),
                 if (_selectedCountMethod == 'weekly' ||
@@ -514,7 +684,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                             : '',
                   ),
                   decoration: const InputDecoration(
-                    labelText: 'Tipo',
+                    labelText: 'Tipo de Conclusão',
                     border: OutlineInputBorder(),
                     suffixIcon: Icon(Icons.arrow_forward_ios, size: 18),
                   ),
@@ -524,7 +694,7 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                       MaterialPageRoute(
                         builder:
                             (context) => SelectionScreen(
-                              title: 'Selecionar Tipo',
+                              title: 'Selecionar Tipo de Conclusão',
                               options: _completionTypeDisplayNames,
                               initialValue: _selectedCompletionMethod,
                             ),
@@ -537,11 +707,11 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                       });
                     }
                   },
-                  validator: (value) {
-                    if (value == null || value.isEmpty)
-                      return 'Por favor, selecione o tipo de completude.';
-                    return null;
-                  },
+                  validator:
+                      (value) =>
+                          (value == null || value.isEmpty)
+                              ? 'Por favor, selecione o tipo de completude.'
+                              : null,
                 ),
                 const SizedBox(height: 16),
                 if (_selectedCompletionMethod == 'quantity' ||
@@ -568,6 +738,74 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
                       return null;
                     },
                   ),
+
+                const SizedBox(height: 20),
+                const Divider(),
+                const SizedBox(height: 10),
+                Text(
+                  'Lembretes',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                SwitchListTile(
+                  title: const Text('Ativar Lembretes'),
+                  value: _reminderEnabled,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _reminderEnabled = value;
+                      _formChanged = true;
+                    });
+                  },
+                ),
+                if (_reminderEnabled) ...[
+                  ListTile(
+                    title: const Text('Horário do Lembrete'),
+                    subtitle: Text(
+                      _selectedReminderTime == null
+                          ? 'Não definido'
+                          : _selectedReminderTime!.format(context),
+                    ),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 18),
+                    onTap: () => _selectReminderTime(context),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4.0),
+                      side: BorderSide(
+                        color:
+                            Theme.of(
+                              context,
+                            ).inputDecorationTheme.border?.borderSide.color ??
+                            Colors.grey,
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 8.0,
+                      horizontal: 12.0,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Repetir em:',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8.0,
+                    runSpacing: 4.0,
+                    children: List<Widget>.generate(_dayKeys.length, (
+                      int index,
+                    ) {
+                      return FilterChip(
+                        label: Text(_dayDisplayNames[index]),
+                        selected: _selectedReminderDays[_dayKeys[index]]!,
+                        onSelected: (bool selected) {
+                          setState(() {
+                            _selectedReminderDays[_dayKeys[index]] = selected;
+                            _formChanged = true;
+                          });
+                        },
+                      );
+                    }),
+                  ),
+                ],
                 const SizedBox(height: 20),
               ],
             ),
@@ -583,8 +821,8 @@ class _HabitFormScreenState extends State<HabitFormScreen> {
             child: ElevatedButton(
               onPressed: _submitHabit,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).primaryColor,
-                foregroundColor: Colors.white,
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                foregroundColor: Theme.of(context).colorScheme.onPrimary,
                 padding: const EdgeInsets.symmetric(vertical: 12.0),
                 textStyle: const TextStyle(fontSize: 16),
               ),
@@ -614,10 +852,15 @@ class QuantityInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IntrinsicHeight(
+      // Garante que o Row e seus filhos tenham a mesma altura
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        padding: const EdgeInsets.symmetric(
+          vertical: 8.0,
+        ), // Adiciona padding vertical se necessário
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment:
+              CrossAxisAlignment
+                  .stretch, // Faz os filhos esticarem verticalmente
           children: [
             Expanded(
               child: TextFormField(
@@ -635,14 +878,17 @@ class QuantityInput extends StatelessWidget {
             const SizedBox(width: 8),
             Container(
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade400),
+                border: Border.all(
+                  color: Colors.grey.shade400,
+                ), // Adapte a cor ao tema
                 borderRadius: BorderRadius.circular(4.0),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
-                    width: 48,
+                    // Define largura para os botões
+                    width: 48, // Ajuste conforme necessário
                     child: TextButton(
                       style: TextButton.styleFrom(
                         padding: EdgeInsets.zero,
@@ -656,6 +902,7 @@ class QuantityInput extends StatelessWidget {
                       onPressed: () {
                         int currentValue = int.tryParse(controller.text) ?? 0;
                         if (currentValue > 0) {
+                          // Impede valores negativos
                           controller.text = (currentValue - 1).toString();
                           onChanged(controller.text);
                         }
@@ -663,7 +910,7 @@ class QuantityInput extends StatelessWidget {
                       child: const Icon(Icons.remove, size: 20),
                     ),
                   ),
-                  Container(width: 1, color: Colors.grey.shade300),
+                  Container(width: 1, color: Colors.grey.shade300), // Divisor
                   SizedBox(
                     width: 48,
                     child: TextButton(

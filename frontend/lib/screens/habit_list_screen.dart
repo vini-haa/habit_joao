@@ -7,15 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:frontend/models/category_model.dart';
 import 'package:frontend/models/habit.dart';
 import 'package:frontend/screens/habit_form_screen.dart';
+import 'package:frontend/services/notification_service.dart';
 import 'package:http/http.dart' as http;
-// import 'package:path_provider/path_provider.dart'; // Remova esta importação, não será mais necessária para a exportação
-// import 'package:share_plus/share_plus.dart'; // Descomente se for usar SharePlus para compartilhar
 
 class HabitListScreen extends StatefulWidget {
   const HabitListScreen({super.key});
 
   @override
-  State<HabitListScreen> createState() => _HabitListScreenState();
+  _HabitListScreenState createState() => _HabitListScreenState();
 }
 
 class _HabitListScreenState extends State<HabitListScreen> {
@@ -118,6 +117,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
           'quantity_completed': quantityCompleted,
         }),
       );
+      if (!mounted) return;
       if (response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Hábito registrado com sucesso!')),
@@ -137,6 +137,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erro de conexão ao registrar: $e')),
       );
@@ -276,7 +277,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
           (BuildContext context) => AlertDialog(
             title: const Text('Confirmar Exclusão'),
             content: const Text(
-              'Tem certeza de que deseja excluir este hábito? Todos os registros relacionados serão apagados.',
+              'Tem certeza de que deseja excluir este hábito? Todos os registros e lembretes relacionados serão apagados.',
             ),
             actions: <Widget>[
               TextButton(
@@ -296,9 +297,14 @@ class _HabitListScreenState extends State<HabitListScreen> {
     if (confirmDelete == true && mounted) {
       try {
         final response = await http.delete(Uri.parse(apiUrl));
+        if (!mounted) return;
         if (response.statusCode == 200) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Hábito excluído com sucesso!')),
+          );
+          await NotificationService().cancelNotification(habitId);
+          await NotificationService().cancelWeeklyNotificationsForHabit(
+            habitId,
           );
           _refreshDataAfterModification();
         } else {
@@ -307,6 +313,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
           );
         }
       } catch (e) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Erro de conexão ao excluir: $e')),
         );
@@ -339,11 +346,12 @@ class _HabitListScreenState extends State<HabitListScreen> {
           ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
     final String apiUrl = '$_baseUrl/habit_records/today?habit_id=$habitId';
     try {
       final response = await http.delete(Uri.parse(apiUrl));
+      if (!mounted) return;
       if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -365,36 +373,30 @@ class _HabitListScreenState extends State<HabitListScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erro de conexão ao limpar registro: $e')),
       );
     }
   }
 
-  // --- INÍCIO DAS NOVAS FUNÇÕES PARA IMPORTAR/EXPORTAR/DELETAR ---
   Future<void> _exportData() async {
     try {
       final response = await http.get(Uri.parse('$_baseUrl/export_data'));
+      if (!mounted) return;
       if (response.statusCode == 200) {
         final String jsonData = response.body;
         final String timestamp =
             DateTime.now().toIso8601String().replaceAll(':', '-').split('.')[0];
         final String fileName = 'habits_backup_$timestamp.json';
-
-        // CONVERTER A STRING JSON EM BYTES
         final Uint8List bytes = Uint8List.fromList(utf8.encode(jsonData));
 
-        // Usa FilePicker para permitir ao usuário escolher o local e passa os bytes
         String? selectedDirectory = await FilePicker.platform.saveFile(
           fileName: fileName,
           type: FileType.custom,
           allowedExtensions: ['json'],
-          bytes: bytes, // AQUI ESTÁ A MUDANÇA PRINCIPAL: PASSAR OS BYTES
+          bytes: bytes,
         );
-
-        // A PARTIR DAQUI, o plugin já deveria ter salvo o arquivo,
-        // então não precisamos mais de `File(selectedDirectory).writeAsString(jsonData);`
-        // apenas verificar se o usuário selecionou um local.
 
         if (selectedDirectory != null) {
           if (mounted) {
@@ -404,8 +406,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
               ),
             );
           }
-          // Opcional: usar share_plus para compartilhar o arquivo
-          // await Share.shareXFiles([XFile(selectedDirectory)], text: 'Backup dos Hábitos');
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -432,8 +432,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
       }
     }
   }
-
-  // ... (código existente da HabitListScreen) ...
 
   Future<void> _importData() async {
     bool confirmImport =
@@ -474,13 +472,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
         File file = File(result.files.single.path!);
         String jsonData = await file.readAsString();
 
-        // >>>>>> ADIÇÃO PARA DEPURAR E VERIFICAR O CONTEÚDO LIDO <<<<<<
-        print('----- INÍCIO DO CONTEÚDO JSON LIDO PARA IMPORTAÇÃO -----');
-        print(jsonData);
-        print('----- FIM DO CONTEÚDO JSON LIDO PARA IMPORTAÇÃO -----');
-
         if (jsonData.trim().isEmpty) {
-          // Usamos .trim() para ignorar espaços em branco
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -490,36 +482,32 @@ class _HabitListScreenState extends State<HabitListScreen> {
               ),
             );
           }
-          return; // Interrompe a importação se o arquivo estiver vazio
+          return;
         }
-        // >>>>>> FIM DA ADIÇÃO PARA DEPURAR <<<<<<
 
         final response = await http.post(
           Uri.parse('$_baseUrl/import_data'),
           headers: <String, String>{
             'Content-Type': 'application/json; charset=UTF-8',
           },
-          body: utf8.encode(
-            jsonData,
-          ), // ESSA É A MUDANÇA CRÍTICA: Encode a string para bytes
+          body: utf8.encode(jsonData), // Envia como bytes UTF-8
         );
 
-        if (mounted) {
-          if (response.statusCode == 201) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Dados importados com sucesso!')),
-            );
-            _refreshDataAfterModification();
-          } else {
-            final errorData = jsonDecode(response.body);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Erro ao importar dados: ${errorData['error'] ?? response.body}',
-                ),
+        if (!mounted) return;
+        if (response.statusCode == 201) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Dados importados com sucesso!')),
+          );
+          _refreshDataAfterModification();
+        } else {
+          final errorData = jsonDecode(response.body);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Erro ao importar dados: ${errorData['error'] ?? response.body}',
               ),
-            );
-          }
+            ),
+          );
         }
       } else {
         if (mounted) {
@@ -537,7 +525,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
     }
   }
 
-  // ... (resto do código da HabitListScreen) ...
   Future<void> _deleteAllData() async {
     bool confirmDelete =
         await showDialog<bool>(
@@ -572,24 +559,23 @@ class _HabitListScreenState extends State<HabitListScreen> {
       final response = await http.delete(
         Uri.parse('$_baseUrl/delete_all_data'),
       );
-      if (mounted) {
-        if (response.statusCode == 200) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Todos os dados foram excluídos com sucesso!'),
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Todos os dados foram excluídos com sucesso!'),
+          ),
+        );
+        _refreshDataAfterModification();
+      } else {
+        final errorData = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Erro ao excluir dados: ${errorData['error'] ?? response.body}',
             ),
-          );
-          _refreshDataAfterModification();
-        } else {
-          final errorData = jsonDecode(response.body);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Erro ao excluir dados: ${errorData['error'] ?? response.body}',
-              ),
-            ),
-          );
-        }
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -599,7 +585,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
       }
     }
   }
-  // --- FIM DAS NOVAS FUNÇÕES ---
 
   @override
   Widget build(BuildContext context) {
@@ -608,22 +593,19 @@ class _HabitListScreenState extends State<HabitListScreen> {
         slivers: <Widget>[
           SliverAppBar.large(
             title: const Text('Meus Hábitos'),
-            expandedHeight: 120.0,
             actions: [
               IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: _loadAllHabitsAndSetupFilters,
               ),
-              // --- INÍCIO DO NOVO BOTÃO DE MENU ---
               PopupMenuButton<String>(
                 onSelected: (value) {
-                  if (value == 'export') {
+                  if (value == 'export')
                     _exportData();
-                  } else if (value == 'import') {
+                  else if (value == 'import')
                     _importData();
-                  } else if (value == 'delete_all') {
+                  else if (value == 'delete_all')
                     _deleteAllData();
-                  }
                 },
                 itemBuilder:
                     (BuildContext context) => <PopupMenuEntry<String>>[
@@ -658,11 +640,8 @@ class _HabitListScreenState extends State<HabitListScreen> {
                         ),
                       ),
                     ],
-                icon: const Icon(
-                  Icons.manage_history_outlined,
-                ), // Ícone sugestivo para gerenciamento de dados
+                icon: const Icon(Icons.manage_history_outlined),
               ),
-              // --- FIM DO NOVO BOTÃO DE MENU ---
             ],
           ),
           SliverToBoxAdapter(
@@ -673,6 +652,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
                         vertical: 8.0,
                         horizontal: 4.0,
                       ),
+                      // CORREÇÃO AQUI: O child do Padding é o SingleChildScrollView
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
@@ -696,9 +676,9 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                   ),
                                 ),
                                 selected: _selectedCategoryIdFilter == null,
-                                onSelected: (bool selected) {
-                                  _filterHabitsBy(categoryId: null);
-                                },
+                                onSelected:
+                                    (bool selected) =>
+                                        _filterHabitsBy(categoryId: null),
                                 checkmarkColor:
                                     _selectedCategoryIdFilter == null
                                         ? Theme.of(
@@ -750,11 +730,11 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                     ),
                                   ),
                                   selected: isSelected,
-                                  onSelected: (bool selected) {
-                                    _filterHabitsBy(
-                                      categoryId: selected ? category.id : null,
-                                    );
-                                  },
+                                  onSelected:
+                                      (bool selected) => _filterHabitsBy(
+                                        categoryId:
+                                            selected ? category.id : null,
+                                      ),
                                   checkmarkColor:
                                       isSelected
                                           ? Theme.of(
@@ -842,17 +822,12 @@ class _HabitListScreenState extends State<HabitListScreen> {
                             habit.targetQuantity!.toDouble();
                         progressFraction = progressFraction.clamp(0.0, 1.0);
                       } else {
-                        hasTargetAndIsQuantitative =
-                            false; // Não há meta quantitativa para mostrar progresso em barra
-                        isTargetMet =
-                            (habit.currentPeriodQuantity ?? 0) >
-                            0; // Considera "completo" se houver qualquer quantidade
-                        progressFraction =
-                            isTargetMet ? 1.0 : 0.0; // Barra cheia ou vazia
+                        hasTargetAndIsQuantitative = false;
+                        isTargetMet = (habit.currentPeriodQuantity ?? 0) > 0;
+                        progressFraction = isTargetMet ? 1.0 : 0.0;
                       }
 
                       if (isTargetMet && hasTargetAndIsQuantitative) {
-                        // Meta quantitativa atingida
                         mainButtonIcon = Icons.check_rounded;
                         mainButtonContainerColor =
                             Theme.of(
@@ -860,16 +835,14 @@ class _HabitListScreenState extends State<HabitListScreen> {
                             ).colorScheme.surfaceContainerLowest;
                         mainButtonIconColor =
                             Theme.of(context).colorScheme.primary;
-                        disableMainButtonTap =
-                            true; // Desabilita se a meta específica foi atingida
+                        disableMainButtonTap = true;
                       } else {
-                        // Meta quantitativa não atingida (ou não existe meta)
                         mainButtonIcon = Icons.add_rounded;
                         mainButtonContainerColor =
                             Theme.of(context).colorScheme.primaryContainer;
                         mainButtonIconColor =
                             Theme.of(context).colorScheme.onPrimaryContainer;
-                        disableMainButtonTap = false; // Permite adicionar mais
+                        disableMainButtonTap = false;
                       }
                     } else {
                       // Booleano
@@ -893,7 +866,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                         disableMainButtonTap = false;
                       }
                     }
-
                     return Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8.0,
@@ -907,7 +879,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                         elevation: 2,
                         clipBehavior: Clip.antiAlias,
                         child: LayoutBuilder(
-                          // Adicionado para obter a largura do card
                           builder: (context, constraints) {
                             final cardWidth = constraints.maxWidth;
                             final progressBarWidth =
@@ -918,9 +889,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
 
                             return Stack(
                               children: [
-                                // Barra de progresso visual no fundo
-                                if (hasTargetAndIsQuantitative ||
-                                    isBoolean) // Mostrar barra para quantitativos com meta ou booleanos
+                                if (hasTargetAndIsQuantitative || isBoolean)
                                   Positioned.fill(
                                     child: Align(
                                       alignment: Alignment.centerLeft,
@@ -928,7 +897,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                         width: progressBarWidth,
                                         decoration: BoxDecoration(
                                           color: progressColor,
-                                          // borderRadius: BorderRadius.circular(16), // Para acompanhar o card
                                         ),
                                       ),
                                     ),
@@ -943,14 +911,12 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
-                                    mainAxisSize:
-                                        MainAxisSize
-                                            .min, // Para o Card não tentar ser infinito
+                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Padding(
                                         padding: const EdgeInsets.only(
                                           right: 60.0,
-                                        ), // Espaço para o botão de check/add e menu
+                                        ),
                                         child: Text(
                                           habit.name,
                                           style: TextStyle(
@@ -1007,7 +973,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                                   .toList(),
                                         ),
                                       const SizedBox(height: 8),
-                                      // Texto de Progresso
                                       if (isQuantitative)
                                         Text(
                                           'Progresso: ${habit.currentPeriodQuantity ?? 0}${hasTargetAndIsQuantitative ? " de ${habit.targetQuantity}" : ""} ${habit.completionMethod == 'minutes' ? 'min' : 'x'}',
@@ -1026,16 +991,16 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                           style: TextStyle(
                                             fontSize: 14,
                                             color:
-                                                Theme.of(context)
-                                                    .colorScheme
-                                                    .primary, // Cor de destaque
+                                                Theme.of(
+                                                  context,
+                                                ).colorScheme.primary,
                                             fontWeight: FontWeight.w500,
                                           ),
                                         )
                                       else if (isBoolean &&
                                           !habit.isCompletedToday)
                                         Text(
-                                          'Pendente', // Ou "Toque para completar"
+                                          'Pendente',
                                           style: TextStyle(
                                             fontSize: 14,
                                             color: Theme.of(context)
@@ -1045,8 +1010,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                           ),
                                         )
                                       else if (habit.countMethod == 'weekly' ||
-                                          habit.countMethod ==
-                                              'monthly') // Fallback para outros tipos se necessário
+                                          habit.countMethod == 'monthly')
                                         Text(
                                           'Progresso: ${habit.currentPeriodDaysCompleted ?? 0} de ${habit.targetDaysPerWeek ?? 'N/A'} dias',
                                           style: TextStyle(
@@ -1058,7 +1022,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                           ),
                                         ),
                                       const SizedBox(height: 4),
-                                      // Streak
                                       if (habit.currentStreak > 0)
                                         Row(
                                           mainAxisSize: MainAxisSize.min,
@@ -1066,9 +1029,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                             Icon(
                                               Icons
                                                   .local_fire_department_rounded,
-                                              color:
-                                                  Colors
-                                                      .orangeAccent, // Ou Theme.of(context).colorScheme.tertiary
+                                              color: Colors.orangeAccent,
                                               size: 18,
                                             ),
                                             const SizedBox(width: 4),
@@ -1085,36 +1046,27 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                           ],
                                         )
                                       else
-                                        const SizedBox(
-                                          height: 18,
-                                        ), // Placeholder para manter a altura consistente
-                                      const SizedBox(
-                                        height: 10,
-                                      ), // Espaçamento inferior
+                                        const SizedBox(height: 18),
+                                      const SizedBox(height: 10),
                                     ],
                                   ),
                                 ),
-                                // Botão de Check/Add
                                 Positioned(
                                   top: 12,
-                                  right: 12, // Ajuste conforme necessário
+                                  right: 12,
                                   child: Material(
                                     color: mainButtonContainerColor,
                                     borderRadius: BorderRadius.circular(12.0),
-                                    elevation:
-                                        disableMainButtonTap
-                                            ? 0
-                                            : 2, // Sutil elevação quando ativo
+                                    elevation: disableMainButtonTap ? 0 : 2,
                                     child: InkWell(
                                       borderRadius: BorderRadius.circular(12.0),
                                       onTap:
                                           disableMainButtonTap
-                                              ? null // Desabilitado se a meta foi atingida (para quantitativos) ou já completo (booleanos)
+                                              ? null
                                               : () {
                                                 if (isQuantitative) {
                                                   _showQuantityDialog(habit);
                                                 } else {
-                                                  // Booleano
                                                   _recordHabitCompletion(
                                                     habit.id,
                                                     habit.completionMethod,
@@ -1123,7 +1075,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                               },
                                       child: Container(
                                         width: 55,
-                                        height: 55, // Tamanho do botão
+                                        height: 55,
                                         alignment: Alignment.center,
                                         child: Icon(
                                           mainButtonIcon,
@@ -1134,7 +1086,6 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                     ),
                                   ),
                                 ),
-                                // Botão de Menu (Três Pontos)
                                 Positioned(
                                   bottom: 8,
                                   right: 8,
@@ -1147,10 +1098,7 @@ class _HabitListScreenState extends State<HabitListScreen> {
                                           .withOpacity(0.7),
                                       size: 26,
                                     ),
-                                    offset: const Offset(
-                                      0,
-                                      30,
-                                    ), // Ajusta a posição do menu
+                                    offset: const Offset(0, 30),
                                     onSelected: (value) async {
                                       if (value == 'edit') {
                                         final result = await Navigator.push(
